@@ -15,4 +15,15 @@ requests>=2.31.0
 urllib3>=2.0.0
 
 # For better error handling and logging
-tenacity>=8.0.0 
+tenacity>=8.0.0
+
+# Multi-agent framework
+adk-python>=0.1.0
+
+# WebSocket support
+websockets>=11.0.0
+fastapi>=0.104.0
+uvicorn>=0.24.0
+
+# Local TTS with Piper
+piper-tts>=1.2.0 
