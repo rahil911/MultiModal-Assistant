@@ -38,27 +38,66 @@ The codebase is organized into focused, modular components:
 
 ## 🚀 Quick Start
 
-### 1. **Install Dependencies**
+### 1. **Install System Dependencies**
+**Ubuntu/Debian:**
+```bash
+sudo apt-get update
+sudo apt-get install -y portaudio19-dev python3-pyaudio libasound2-dev
+```
+
+**macOS:**
+```bash
+brew install portaudio
+```
+
+**Other Systems:** See `system-requirements.txt` for complete instructions.
+
+### 2. **Install Python Dependencies**
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. **Set up API Key**
+### 3. **Set up API Key**
 Create a `.env` file in the project root:
 ```bash
 GEMINI_API_KEY=your_gemini_api_key_here
 ```
 Get your key from [Google AI Studio](https://aistudio.google.com/app/apikey)
 
-### 3. **Run the Assistant**
+### 4. **Run the Assistant**
 ```bash
 python3 main.py
 ```
 
-### 4. **Test Examples**
+### 5. **Test Examples**
 - **Weather Query**: "What's the weather in Tokyo?"
 - **General Query**: "Tell me a joke about programming"
 - **Math Query**: "What is 25 * 4?"
+
+## 🔧 Troubleshooting
+
+### **PortAudio Library Not Found**
+If you encounter `OSError: PortAudio library not found` (common in container environments):
+
+**For Docker/Container deployments:**
+```dockerfile
+# Add to your Dockerfile:
+RUN apt-get update && apt-get install -y portaudio19-dev python3-pyaudio libasound2-dev
+```
+
+**For cloud environments (Replit, CodeSpaces, etc.):**
+```bash
+# Install system packages first:
+sudo apt-get install -y portaudio19-dev python3-pyaudio libasound2-dev
+# Then reinstall sounddevice:
+pip uninstall sounddevice
+pip install sounddevice
+```
+
+**Alternative solutions:**
+- Use system Python audio packages: `sudo apt-get install python3-pyaudio`
+- For audio-less testing, consider mocking the audio components
+- See `system-requirements.txt` for platform-specific solutions
 
 ## 🤖 Why This Architecture?
 

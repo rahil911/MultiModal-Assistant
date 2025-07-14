@@ -1,0 +1,26 @@
+# System Dependencies for MultiModal Assistant
+
+## Ubuntu/Debian systems:
+sudo apt-get update
+sudo apt-get install -y portaudio19-dev python3-pyaudio libasound2-dev
+
+## CentOS/RHEL/Fedora systems:
+sudo yum install -y portaudio-devel alsa-lib-devel
+# or for newer versions:
+sudo dnf install -y portaudio-devel alsa-lib-devel
+
+## macOS (using Homebrew):
+brew install portaudio
+
+## For Docker/Container environments:
+# Add this to your Dockerfile:
+# RUN apt-get update && apt-get install -y portaudio19-dev python3-pyaudio libasound2-dev
+
+## Alternative: Use system package manager to install python3-pyaudio
+# This can sometimes resolve PortAudio issues:
+# Ubuntu/Debian: sudo apt-get install python3-pyaudio
+# CentOS/RHEL: sudo yum install python3-pyaudio
+
+## Note:
+# PortAudio is required for the sounddevice package to work properly.
+# Without these system libraries, you'll get "PortAudio library not found" errors. 
