@@ -1,0 +1,108 @@
+version: '3.8'
+
+services:
+  # Main MultiModal Assistant application
+  multimodal-assistant:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: multimodal-assistant
+    ports:
+      - "8000:8000"  # Main application and WebSocket server
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - TTS_WORKER_URL=ws://tts-worker:8766
+      - AUDIO_DISPATCHER_ENABLED=true
+      - STREAMING_ENABLED=true
+    depends_on:
+      - tts-worker
+    volumes:
+      - ./.env:/app/.env:ro
+    networks:
+      - multimodal-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Piper TTS Worker for local audio generation
+  tts-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.tts
+    container_name: tts-worker
+    ports:
+      - "8766:8766"  # TTS WebSocket endpoint
+    environment:
+      - PIPER_MODEL=en_US-libritts_r-medium
+      - SAMPLE_RATE=22050
+      - CHUNK_SIZE=1024
+    volumes:
+      - tts-models:/app/models
+    networks:
+      - multimodal-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import websockets; print('TTS ready')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Audio Dispatcher (bridges command bus to TTS)
+  audio-dispatcher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: audio-dispatcher
+    command: python audio_dispatcher.py
+    environment:
+      - TTS_WORKER_URL=ws://tts-worker:8766
+      - COMMAND_BUS_URL=ws://multimodal-assistant:8000
+    depends_on:
+      - multimodal-assistant
+      - tts-worker
+    networks:
+      - multimodal-network
+    restart: unless-stopped
+
+  # Redis for command bus scaling (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: multimodal-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - multimodal-network
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+
+  # Frontend development server (optional)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: multimodal-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+      - REACT_APP_WS_URL=ws://localhost:8000
+    depends_on:
+      - multimodal-assistant
+    networks:
+      - multimodal-network
+    restart: unless-stopped
+
+networks:
+  multimodal-network:
+    driver: bridge
+
+volumes:
+  tts-models:
+    driver: local
+  redis-data:
+    driver: local

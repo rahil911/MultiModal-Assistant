@@ -31,6 +31,8 @@ class PiperTTSWorker:
         self.clients = set()
         self.sentence_buffer = ""
         self.command_bus = None
+        self.processing_queue = asyncio.Queue()
+        self.active_syntheses = set()
         
     async def start(self):
         """Start the TTS worker server."""
@@ -41,6 +43,10 @@ class PiperTTSWorker:
             # Connect to command bus
             self.command_bus = await get_command_bus()
             
+            # Start processing workers
+            asyncio.create_task(self._synthesis_worker())
+            asyncio.create_task(self._listen_for_speech_requests())
+            
             # Start WebSocket server
             server = await websockets.serve(
                 self.handle_client,
@@ -49,9 +55,7 @@ class PiperTTSWorker:
             )
             
             print(f"🎵 TTS Worker started on ws://{self.host}:{self.port}")
-            
-            # Start command bus listener
-            asyncio.create_task(self._listen_for_speech_requests())
+            print(f"   📊 Ready for streaming synthesis requests")
             
             return server
             
@@ -95,21 +99,67 @@ class PiperTTSWorker:
     async def _process_client_message(self, websocket, message: str):
         """Process incoming messages from TTS clients."""
         try:
+            # Simple text input for synthesis
+            if not message.startswith('{'):
+                # Direct text input
+                await self._queue_synthesis(message, websocket)
+                return
+            
+            # JSON message format
             data = json.loads(message)
             action = data.get("action")
             
             if action == "synthesize":
                 text = data.get("text", "")
-                await self._synthesize_and_stream(text, websocket)
+                await self._queue_synthesis(text, websocket)
                 
             elif action == "stop":
                 # Stop current synthesis
                 pass
                 
         except json.JSONDecodeError:
-            print(f"⚠️ Invalid JSON from TTS client: {message}")
+            # Treat as plain text
+            await self._queue_synthesis(message, websocket)
         except Exception as e:
             print(f"❌ Error processing TTS client message: {e}")
+    
+    async def _queue_synthesis(self, text: str, websocket):
+        """Queue text for synthesis processing."""
+        if not text.strip():
+            return
+        
+        synthesis_id = f"syn_{len(self.active_syntheses)}"
+        self.active_syntheses.add(synthesis_id)
+        
+        # Add to processing queue
+        await self.processing_queue.put({
+            "id": synthesis_id,
+            "text": text,
+            "websocket": websocket,
+            "timestamp": asyncio.get_event_loop().time()
+        })
+    
+    async def _synthesis_worker(self):
+        """Worker that processes synthesis requests from the queue."""
+        while True:
+            try:
+                # Get next synthesis request
+                request = await self.processing_queue.get()
+                
+                synthesis_id = request["id"]
+                text = request["text"]
+                websocket = request["websocket"]
+                
+                print(f"🎵 Processing synthesis: {text[:50]}...")
+                
+                # Perform synthesis
+                await self._synthesize_and_stream(text, websocket, synthesis_id)
+                
+                # Mark as complete
+                self.active_syntheses.discard(synthesis_id)
+                
+            except Exception as e:
+                print(f"❌ Error in synthesis worker: {e}")
     
     async def _listen_for_speech_requests(self):
         """Listen for speech requests from the command bus."""
@@ -144,41 +194,73 @@ class PiperTTSWorker:
             return_exceptions=True
         )
     
-    async def _synthesize_and_stream(self, text: str, websocket):
+    async def _synthesize_and_stream(self, text: str, websocket, synthesis_id: str = None):
         """
         Synthesize text to speech and stream PCM chunks.
         
         Args:
             text: Text to synthesize
             websocket: WebSocket to stream to
+            synthesis_id: Unique identifier for this synthesis
         """
         try:
             # Send synthesis start notification
-            await websocket.send(json.dumps({
+            start_msg = {
                 "type": "synthesis_start",
-                "text": text[:100] + "..." if len(text) > 100 else text
-            }))
+                "text": text[:100] + "..." if len(text) > 100 else text,
+                "id": synthesis_id
+            }
+            await websocket.send(json.dumps(start_msg))
             
             # Process text sentence by sentence for lower latency
             sentences = self._split_into_sentences(text)
+            total_sentences = len(sentences)
             
-            for sentence in sentences:
+            for i, sentence in enumerate(sentences):
                 if sentence.strip():
+                    # Send progress update
+                    progress_msg = {
+                        "type": "synthesis_progress", 
+                        "progress": (i + 1) / total_sentences * 100,
+                        "sentence": sentence[:50] + "..." if len(sentence) > 50 else sentence,
+                        "id": synthesis_id
+                    }
+                    await websocket.send(json.dumps(progress_msg))
+                    
                     # Generate audio for this sentence
+                    chunk_count = 0
                     async for audio_chunk in self._synthesize_sentence(sentence):
-                        # Send PCM audio chunk
+                        # Send PCM audio chunk as binary data
                         await websocket.send(audio_chunk)
+                        chunk_count += 1
+                    
+                    print(f"🎵 Streamed {chunk_count} audio chunks for: {sentence[:30]}...")
             
             # Send completion notification
-            await websocket.send(json.dumps({
+            complete_msg = {
                 "type": "synthesis_complete",
-                "text": text
-            }))
+                "text": text,
+                "id": synthesis_id,
+                "total_sentences": total_sentences
+            }
+            await websocket.send(json.dumps(complete_msg))
             
         except websockets.exceptions.ConnectionClosed:
             self.clients.discard(websocket)
+            print(f"🔌 Client disconnected during synthesis: {synthesis_id}")
         except Exception as e:
-            print(f"❌ Error in TTS synthesis: {e}")
+            print(f"❌ Error in TTS synthesis {synthesis_id}: {e}")
+            
+            # Send error notification
+            try:
+                error_msg = {
+                    "type": "synthesis_error",
+                    "error": str(e),
+                    "id": synthesis_id
+                }
+                await websocket.send(json.dumps(error_msg))
+            except:
+                pass
     
     def _split_into_sentences(self, text: str) -> list:
         """Split text into sentences for streaming synthesis."""

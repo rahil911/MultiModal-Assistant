@@ -8,7 +8,7 @@ from typing import Dict, Any
 import json
 from .base_agent import BaseAgent
 from tools import get_current_weather
-from bus import ActionTypes
+from bus import ActionTypes, emit_speech, emit_status, emit_progress, emit_token
 
 
 class WeatherAgent(BaseAgent):
@@ -45,20 +45,24 @@ class WeatherAgent(BaseAgent):
                 await self.notify_error(error_msg)
                 return {"error": error_msg}
             
-            # Show progress
-            await self.notify_progress(f"Fetching weather data for {location}")
-            await self.emit(ActionTypes.SHOW_PROGRESS, {
-                "message": f"🌤️ Fetching current weather for {location}...",
-                "location": location
-            })
+            # Emit immediate progress for streaming
+            emit_speech(f"I'll check the weather in {location} for you...", source=self.name)
+            emit_status(f"Connecting to weather service for {location}", source=self.name)
+            emit_progress("Initializing weather lookup...", 10, source=self.name)
             
-            # Get weather data
+            # The get_current_weather function now emits its own progress
+            # Get weather data (this will emit progress internally)
             weather_data = get_current_weather(location)
             
             # Format the response
             formatted_response = self._format_weather_response(weather_data)
             
-            # Emit weather update
+            # Emit completion and results
+            emit_progress("Weather data processed successfully", 100, source=self.name)
+            emit_speech(f"Here's the weather update: {formatted_response}", source=self.name)
+            emit_status("Weather lookup completed", source=self.name)
+            
+            # Emit weather update event
             await self.emit("weather_update", {
                 "location": location,
                 "weather_data": weather_data,
@@ -110,8 +114,25 @@ class WeatherAgent(BaseAgent):
                 except json.JSONDecodeError:
                     pass
         
-        # Fallback: treat entire task as location
-        # This is a simple approach - in production, you might use NLP to extract location
+        # Fallback: extract location from task string
+        # Handle cases like "Get weather information for Seattle"
+        import re
+        
+        # Look for location patterns in the task
+        location_patterns = [
+            r'(?:get\s+weather\s+information\s+for\s+)([A-Z][a-z\s]+)',  # "Get weather information for Seattle"
+            r'(?:weather\s+in\s+)([A-Z][a-z\s]+)',  # "weather in Seattle"
+            r'(?:weather\s+for\s+)([A-Z][a-z\s]+)',  # "weather for Seattle"
+            r'(?:forecast\s+for\s+)([A-Z][a-z\s]+)',  # "forecast for Seattle"
+            r'(?:temperature\s+in\s+)([A-Z][a-z\s]+)',  # "temperature in Seattle"
+        ]
+        
+        for pattern in location_patterns:
+            match = re.search(pattern, task, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        
+        # If no pattern matches, treat entire task as location
         return task.strip()
     
     def _format_weather_response(self, weather_data: Dict[str, Any]) -> str:

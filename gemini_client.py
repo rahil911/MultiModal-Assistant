@@ -11,6 +11,7 @@ from google.genai import types
 from typing import List, Dict, Any, Tuple, Optional
 from config import GEMINI_API_KEY, MODEL_NAME, TTS_MODEL_NAME, GENERATION_CONFIG, TTS_CONFIG
 from tools import TOOLS_SPEC, execute_function
+from bus import emit_token, emit_speech, emit_status, StreamingEventTypes
 
 
 class GeminiClient:
@@ -88,6 +89,90 @@ class GeminiClient:
         # System message is included in each request
         pass
     
+    async def send_message_with_token_streaming(self, message: str, source: str = "GeminiClient") -> Tuple[str, Optional[str], Optional[str]]:
+        """
+        Send a message with real-time token streaming.
+        
+        Args:
+            message: User message to send
+            source: Source identifier for streaming events
+            
+        Returns:
+            Tuple of (response_text, function_name, function_args)
+        """
+        try:
+            # Emit status that we're starting to think
+            emit_status("Processing your request...", source=source)
+            
+            # Create system prompt with available functions info
+            available_functions = [tool["function"]["name"] for tool in TOOLS_SPEC if tool["type"] == "function"]
+            function_descriptions = []
+            for tool in TOOLS_SPEC:
+                if tool["type"] == "function":
+                    func = tool["function"]
+                    function_descriptions.append(f"- {func['name']}: {func['description']}")
+            
+            system_context = f"""You are a helpful AI assistant.
+
+Available functions:
+{chr(10).join(function_descriptions)}
+
+Instructions:
+- ALWAYS provide a response in the "response" field
+- If the user's question requires external data (like weather), set needs_function_call to true and specify the function call
+- If you can answer directly (like jokes, general questions), set needs_function_call to false
+- Be helpful and conversational in your responses"""
+            
+            full_prompt = f"{system_context}\n\nUser: {message}"
+            
+            # Use streaming with structured output
+            response_stream = self.model.generate_content(
+                full_prompt,
+                generation_config=genai.GenerationConfig(
+                    response_mime_type="application/json",
+                    response_schema=self.function_call_schema,
+                    **GENERATION_CONFIG
+                ),
+                stream=True
+            )
+            
+            # Collect streaming tokens
+            full_text = ""
+            for chunk in response_stream:
+                if chunk.text:
+                    # Emit individual tokens for real-time rendering
+                    emit_token(chunk.text, source=source)
+                    full_text += chunk.text
+            
+            # Parse the complete structured JSON response
+            try:
+                result = json.loads(full_text)
+                
+                # Always get the response text
+                response_text = result.get("response", "")
+                needs_function_call = result.get("needs_function_call", False)
+                
+                # Emit the complete speech for TTS
+                if response_text:
+                    emit_speech(response_text, source=source)
+                
+                if needs_function_call and "function_call" in result:
+                    function_call = result["function_call"]
+                    function_name = function_call.get("name")
+                    function_args = json.dumps(function_call.get("arguments", {}))
+                    return response_text, function_name, function_args
+                else:
+                    # No function call needed, just return the response
+                    return response_text, None, None
+                    
+            except json.JSONDecodeError as e:
+                print(f"Error parsing structured response: {e}")
+                return f"Error parsing response: {full_text}", None, None
+            
+        except Exception as e:
+            print(f"Error in Gemini API streaming call: {e}")
+            return f"Error: {str(e)}", None, None
+
     def send_message_with_streaming(self, message: str) -> Tuple[str, Optional[str], Optional[str]]:
         """
         Send a message and get structured response.

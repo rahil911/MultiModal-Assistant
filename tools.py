@@ -4,6 +4,7 @@ Tools and function definitions for the multimodal assistant.
 """
 
 from typing import Dict, Any, List
+from bus import emit_speech, emit_status, emit_progress
 
 
 def get_current_weather(location: str) -> Dict[str, Any]:
@@ -17,12 +18,28 @@ def get_current_weather(location: str) -> Dict[str, Any]:
     Returns:
         Dictionary containing weather information
     """
-    return {
+    # Emit progress while "working"
+    emit_speech(f"Checking weather for {location}...", source="WeatherTool")
+    emit_status(f"Fetching weather data for {location}", source="WeatherTool") 
+    
+    # Simulate some processing time with progress updates
+    import time
+    time.sleep(0.5)  # Simulate API call delay
+    
+    emit_progress("Analyzing weather conditions...", 50, source="WeatherTool")
+    time.sleep(0.3)
+    
+    result = {
         "location": location,
         "temperature_c": 23,
         "condition": "Partly cloudy",
         "source": "demo_stub"
     }
+    
+    emit_progress("Weather data retrieved successfully", 100, source="WeatherTool")
+    emit_speech(f"Weather update: It's {result['temperature_c']}°C and {result['condition'].lower()} in {location}.", source="WeatherTool")
+    
+    return result
 
 
 # Tool specifications for OpenAI API

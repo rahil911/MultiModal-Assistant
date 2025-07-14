@@ -26,7 +26,7 @@ class MultiAgentAssistant:
         self.command_bus = None
         self.websocket_server_started = False
         
-    async def initialize(self):
+    async def initialize(self, enable_streaming=True, enable_audio=True):
         """Initialize the assistant systems."""
         print("🌟 Initializing MultiModal Assistant (Multi-Agent)")
         print("=" * 55)
@@ -35,15 +35,26 @@ class MultiAgentAssistant:
         self.command_bus = await get_command_bus()
         print("✅ Command bus initialized")
         
-        # Start WebSocket streaming (optional - for web UI)
-        try:
-            await start_websocket_streaming()
-            self.websocket_server_started = True
-            print("✅ WebSocket streaming started on ws://localhost:8000/ws")
-            print("   📱 Visit http://localhost:8000 for real-time action view")
-        except Exception as e:
-            print(f"⚠️ WebSocket server not started: {e}")
-            print("   (CLI mode only)")
+        # Initialize audio pipeline
+        if enable_audio:
+            self._setup_audio_pipeline()
+            print("✅ Audio pipeline connected")
+        
+        # Start streaming server if enabled
+        if enable_streaming:
+            try:
+                # Start both WebSocket and SSE streaming in background
+                asyncio.create_task(self._start_streaming_server())
+                # Brief delay to let server start
+                await asyncio.sleep(0.5)
+                self.websocket_server_started = True
+                print("✅ Streaming server started on http://localhost:8000")
+                print("   📡 SSE endpoint: http://localhost:8000/stream")
+                print("   🔌 WebSocket: ws://localhost:8000/ws")
+                print("   📱 Dashboard: http://localhost:8000/dashboard")
+            except Exception as e:
+                print(f"⚠️ Streaming server not started: {e}")
+                print("   (CLI mode only)")
         
         print("🤖 Agents loaded:")
         for agent_name in self.workflow.list_agents():
@@ -51,6 +62,92 @@ class MultiAgentAssistant:
             print(f"   • {agent_name}: {agent.description}")
         
         print("\n✨ Ready for conversations!")
+        
+    def _setup_audio_pipeline(self):
+        """Set up the audio pipeline to convert speech events to actual audio."""
+        import bus
+        from gemini_client import GeminiClient
+        from audio_handler import AudioHandler
+        
+        # Initialize audio components
+        self.gemini_client = GeminiClient()
+        self.audio_handler = AudioHandler()
+        self.audio_queue = asyncio.Queue()
+        self.audio_worker_started = False
+        
+        # Store original emit_speech function
+        original_emit_speech = bus.emit_speech
+        
+        def audio_enabled_emit_speech(text: str, source: str = "unknown"):
+            # Call original function to maintain event system
+            result = original_emit_speech(text, source)
+            
+            # Add to audio queue for sequential processing
+            try:
+                self.audio_queue.put_nowait({"text": text, "source": source})
+                
+                # Start audio worker if not already started
+                if not self.audio_worker_started:
+                    asyncio.create_task(self._audio_worker())
+                    self.audio_worker_started = True
+                    
+            except Exception as e:
+                print(f"⚠️ Error queuing audio: {e}")
+            
+            return result
+        
+        # Replace emit_speech with audio-enabled version
+        bus.emit_speech = audio_enabled_emit_speech
+    
+    async def _audio_worker(self):
+        """Process audio queue sequentially to prevent overlapping speech."""
+        print("🎵 Audio worker started")
+        
+        while True:
+            try:
+                # Get next audio item from queue
+                audio_item = await self.audio_queue.get()
+                text = audio_item["text"]
+                source = audio_item["source"]
+                
+                print(f"🔊 Processing audio: [{source}] {text[:50]}...")
+                
+                # Generate and play audio
+                await self._generate_and_play_audio(text, source)
+                
+                # Mark task as done
+                self.audio_queue.task_done()
+                
+                # Brief pause between audio items to prevent overlap
+                await asyncio.sleep(0.2)
+                
+            except Exception as e:
+                print(f"⚠️ Audio worker error: {e}")
+        
+    async def _generate_and_play_audio(self, text: str, source: str):
+        """Generate TTS audio and play it."""
+        try:
+            # Generate audio using Gemini TTS
+            audio_data = self.gemini_client.generate_tts_audio(text)
+            
+            if audio_data:
+                # Play audio using AudioHandler
+                self.audio_handler.play_pcm_audio(audio_data)
+                print(f"✅ Audio played: [{source}] {text[:30]}...")
+            else:
+                print(f"❌ No audio generated for: [{source}] {text[:30]}...")
+            
+        except Exception as e:
+            print(f"⚠️ Audio generation error for [{source}]: {e}")
+        
+    async def _start_streaming_server(self):
+        """Start the streaming server in the background."""
+        try:
+            from server import StreamingServer
+            server = StreamingServer(self)
+            await server.start(host="127.0.0.1", port=8000)
+        except Exception as e:
+            print(f"❌ Error starting streaming server: {e}")
         
     async def process_input(self, user_input: str) -> Dict[str, Any]:
         """
@@ -281,6 +378,40 @@ async def run_websocket_only():
         sys.exit(1)
 
 
+async def run_streaming_mode():
+    """Run in streaming mode with FastAPI SSE server and multi-agent coordination."""
+    print("🚀 Starting MultiModal Assistant - Streaming Mode")
+    print("=" * 50)
+    
+    try:
+        # Initialize command bus
+        await get_command_bus()
+        print("✅ Command bus initialized")
+        
+        # Initialize assistant
+        assistant = MultiAgentAssistant()
+        await assistant.initialize()
+        
+        # Start FastAPI streaming server
+        from server import StreamingServer
+        server = StreamingServer(assistant)
+        
+        print("🌊 FastAPI streaming server starting...")
+        print("📡 SSE endpoint: http://localhost:8000/stream")
+        print("🎵 Audio WebSocket: ws://localhost:8000/ws/audio")
+        print("📊 Dashboard: http://localhost:8000/dashboard")
+        print("🔗 Health check: http://localhost:8000/health")
+        
+        # Run the FastAPI server
+        await server.start()
+        
+    except KeyboardInterrupt:
+        print("\n👋 Streaming server stopped")
+    except Exception as e:
+        print(f"❌ Streaming server error: {e}")
+        sys.exit(1)
+
+
 def create_parser():
     """Create command line argument parser."""
     parser = argparse.ArgumentParser(
@@ -310,6 +441,11 @@ Multi-Agent Queries:
         "--websocket-only",
         action="store_true",
         help="Run only WebSocket server for external integration"
+    )
+    group.add_argument(
+        "--streaming-mode",
+        action="store_true", 
+        help="Run in streaming mode with FastAPI SSE server"
     )
     
     parser.add_argument(
@@ -345,6 +481,10 @@ async def main():
         elif args.websocket_only:
             # Run WebSocket server only
             await run_websocket_only()
+            
+        elif args.streaming_mode:
+            # Run in streaming mode with FastAPI SSE server
+            await run_streaming_mode()
             
         elif args.query:
             # Single query mode

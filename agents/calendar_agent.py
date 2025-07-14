@@ -7,7 +7,7 @@ Example domain agent for calendar and scheduling operations.
 from typing import Dict, Any, List
 from datetime import datetime, timedelta
 from .base_agent import BaseAgent
-from bus import ActionTypes
+from bus import ActionTypes, emit_speech, emit_status, emit_progress, emit_token
 
 
 class CalendarAgent(BaseAgent):

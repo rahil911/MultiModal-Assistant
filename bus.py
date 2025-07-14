@@ -126,6 +126,47 @@ async def get_command_bus() -> CommandBus:
     return _command_bus
 
 
+# Simplified streaming event emitter
+def emit(event: Dict[str, Any]) -> str:
+    """
+    Simplified emit function for streaming events.
+    
+    Args:
+        event: Event dictionary (e.g., {"type": "speech", "text": "Hello"})
+        
+    Returns:
+        Event ID
+    """
+    # Add required fields
+    event_id = str(uuid.uuid4())
+    event["id"] = event_id
+    event["timestamp"] = datetime.utcnow().isoformat()
+    
+    # Get the global bus and emit immediately
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # Create task to emit asynchronously
+            asyncio.create_task(_emit_to_bus(event))
+        else:
+            # Not in async context, create new event loop
+            asyncio.run(_emit_to_bus(event))
+    except Exception as e:
+        print(f"❌ Error in emit: {e}")
+        return ""
+    
+    return event_id
+
+
+async def _emit_to_bus(event: Dict[str, Any]):
+    """Internal helper to emit to the command bus."""
+    try:
+        bus = await get_command_bus()
+        bus._queue.put_nowait(json.dumps(event))
+    except Exception as e:
+        print(f"❌ Error emitting to bus: {e}")
+
+
 def emit_action(action: str, data: Dict[str, Any], source: str = None) -> str:
     """
     Convenience function to emit an action to the global command bus.
@@ -180,3 +221,94 @@ class ActionTypes:
     ERROR = "error"
     AUDIO_START = "audio_start"
     AUDIO_COMPLETE = "audio_complete"
+
+
+# Streaming event types for real-time communication
+class StreamingEventTypes:
+    """Event types for stream-as-you-go architecture."""
+    SPEECH = "speech"           # Real-time speech text
+    STATUS = "status"           # Agent status updates  
+    PROGRESS = "progress"       # Progress indicators
+    CHART = "chart"            # Data visualizations
+    TOKEN = "token"            # Individual text tokens
+    AUDIO_CHUNK = "audio_chunk" # PCM audio frames
+    AGENT_START = "agent_start" # Agent begins working
+    AGENT_DONE = "agent_done"   # Agent completes task
+    
+
+import re
+
+# Sentence boundary detection for TTS chunking
+SENTENCE_END_PATTERN = re.compile(r'[.!?]\s+')
+
+def split_into_sentences(text: str) -> list[str]:
+    """
+    Split text into sentences for streaming TTS.
+    
+    Args:
+        text: Input text to split
+        
+    Returns:
+        List of sentence chunks
+    """
+    if not text.strip():
+        return []
+    
+    sentences = []
+    remaining = text
+    
+    while remaining:
+        match = SENTENCE_END_PATTERN.search(remaining)
+        if match:
+            # Found sentence boundary
+            sentence = remaining[:match.end()].strip()
+            if sentence:
+                sentences.append(sentence)
+            remaining = remaining[match.end():]
+        else:
+            # No more sentence boundaries, add remaining text
+            if remaining.strip():
+                sentences.append(remaining.strip())
+            break
+    
+    return sentences
+
+
+# Helper functions for common streaming events
+def emit_speech(text: str, source: str = None) -> str:
+    """Emit a speech event for real-time TTS."""
+    return emit({
+        "type": StreamingEventTypes.SPEECH,
+        "text": text,
+        "source": source
+    })
+
+
+def emit_token(token: str, source: str = None) -> str:
+    """Emit a single token for progressive text rendering.""" 
+    return emit({
+        "type": StreamingEventTypes.TOKEN,
+        "token": token,
+        "source": source
+    })
+
+
+def emit_status(message: str, source: str = None) -> str:
+    """Emit a status update."""
+    return emit({
+        "type": StreamingEventTypes.STATUS,
+        "message": message,
+        "source": source
+    })
+
+
+def emit_progress(message: str, percentage: float = None, source: str = None) -> str:
+    """Emit a progress update."""
+    event = {
+        "type": StreamingEventTypes.PROGRESS,
+        "message": message,
+        "source": source
+    }
+    if percentage is not None:
+        event["percentage"] = percentage
+    return emit(event)

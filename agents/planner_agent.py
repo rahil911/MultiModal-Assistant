@@ -9,7 +9,7 @@ import json
 from .base_agent import BaseAgent
 from gemini_client import GeminiClient
 from audio_handler import AudioHandler
-from bus import ActionTypes
+from bus import ActionTypes, emit_speech, emit_status, emit_progress, emit_token, StreamingEventTypes
 
 
 class PlannerAgent(BaseAgent):
@@ -90,22 +90,19 @@ class PlannerAgent(BaseAgent):
         """
         await self.notify_progress("Thinking...")
         
-        # Emit that we're starting to process
-        await self.emit(ActionTypes.UPDATE_STATUS, {
-            "message": "Processing your request...",
-            "stage": "thinking"
-        })
+        # Emit immediate acknowledgment for streaming
+        emit_speech("Let me help you with that...", source=self.name)
+        emit_status("Processing your request...", source=self.name)
         
-        # Send message to Gemini
-        response_text, function_name, function_args = self.gemini_client.send_message_with_streaming(user_prompt)
+        # Use streaming Gemini client for real-time token emission
+        response_text, function_name, function_args = await self.gemini_client.send_message_with_token_streaming(
+            user_prompt, 
+            source=self.name
+        )
         
-        # Emit the assistant's response
-        if response_text:
-            await self.emit(ActionTypes.SPEAK, {
-                "text": response_text,
-                "priority": "high",
-                "stage": "initial_response"
-            })
+        # The streaming client already emitted tokens and speech
+        # Just announce completion
+        emit_status("Initial response completed", source=self.name)
         
         return {
             "response_text": response_text,
@@ -116,25 +113,17 @@ class PlannerAgent(BaseAgent):
     async def _process_tool_call(self, function_name: str, function_args: str, initial_response: str) -> Dict[str, Any]:
         """Process and execute a tool call, then get the follow-up response."""
         try:
-            # Generate audio for initial response first
-            if initial_response:
-                await self._generate_and_announce_audio(initial_response)
-            
-            # Announce what tool will be used
+            # The initial response was already streamed by the Gemini client
+            # Now announce the tool execution in real-time
             args = json.loads(function_args)
             if function_name == "get_current_weather":
-                tool_message = f"Fetching current weather for {args.get('location', 'the requested location')}..."
-                await self.emit(ActionTypes.SHOW_PROGRESS, {
-                    "message": tool_message,
-                    "tool": function_name,
-                    "args": args
-                })
+                tool_message = f"Now checking the weather for {args.get('location', 'the requested location')}..."
+                emit_speech(tool_message, source=self.name)
+                emit_status(f"Executing weather lookup for {args.get('location')}", source=self.name)
             else:
-                tool_message = f"Using {function_name} to get the information..."
-                await self.emit(ActionTypes.SHOW_PROGRESS, {
-                    "message": tool_message,
-                    "tool": function_name
-                })
+                tool_message = f"Now using {function_name} to get that information..."
+                emit_speech(tool_message, source=self.name)
+                emit_status(f"Executing {function_name}", source=self.name)
             
             await self.notify_progress(tool_message)
             
@@ -156,13 +145,10 @@ class PlannerAgent(BaseAgent):
             # Send tool result back to Gemini and get final response
             final_response = self.gemini_client.send_tool_result(function_name, function_args, tool_result)
             
-            # Emit final response
+            # Emit final response for streaming
             if final_response:
-                await self.emit(ActionTypes.SPEAK, {
-                    "text": final_response,
-                    "priority": "high",
-                    "stage": "final_response"
-                })
+                emit_speech(final_response, source=self.name)
+                emit_status("Tool execution completed", source=self.name)
             
             # Generate and announce audio for final response
             if final_response:

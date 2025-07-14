@@ -1,0 +1,51 @@
+# Dockerfile for Piper TTS Worker
+FROM python:3.9-slim
+
+# Install system dependencies for Piper TTS
+RUN apt-get update && apt-get install -y \
+    espeak-ng \
+    espeak-ng-data \
+    libsndfile1 \
+    curl \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Install Piper TTS and dependencies
+RUN pip install --no-cache-dir \
+    piper-tts>=1.2.0 \
+    websockets>=11.0.0 \
+    asyncio \
+    numpy \
+    scipy
+
+# Create models directory
+RUN mkdir -p /app/models
+
+# Download default Piper model
+RUN cd /app/models && \
+    wget -O en_US-libritts_r-medium.onnx \
+    "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/libritts_r/medium/en_US-libritts_r-medium.onnx" && \
+    wget -O en_US-libritts_r-medium.onnx.json \
+    "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/libritts_r/medium/en_US-libritts_r-medium.onnx.json"
+
+# Copy TTS worker code
+COPY tts_worker.py .
+COPY bus.py .
+
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash tts && \
+    chown -R tts:tts /app
+USER tts
+
+# Expose TTS port
+EXPOSE 8766
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD python -c "import asyncio, websockets; print('TTS ready')" || exit 1
+
+# Start TTS worker
+CMD ["python", "tts_worker.py"]
